@@ -9,8 +9,7 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  Events,
-  InteractionType
+  Events
 } = require("discord.js");
 
 const mercadopago = require("mercadopago");
@@ -30,7 +29,7 @@ mercadopago.configurations = {
   access_token: process.env.MP_TOKEN
 };
 
-// ===================== EXPRESS (RENDER + WEBHOOK) =====================
+// ===================== EXPRESS (RENDER / WEBHOOK) =====================
 const app = express();
 app.use(express.json());
 
@@ -151,35 +150,48 @@ client.on("messageCreate", async message => {
   }
 });
 
-// ===================== INTERAÇÕES =====================
+// ===================== INTERAÇÕES (CORRIGIDO) =====================
 client.on(Events.InteractionCreate, async interaction => {
-  if (interaction.isButton()) {
-    const sorteio = sorteios.get(interaction.message.id);
+  if (!interaction.isButton()) return;
 
-    if (interaction.customId === "participar_sorteio" && sorteio) {
-      if (sorteio.participantes.includes(interaction.user.id))
-        return interaction.reply({ content: "⚠️ Você já está participando!", ephemeral: true });
+  // evita "interação falhou"
+  await interaction.deferReply({ ephemeral: true });
 
-      sorteio.participantes.push(interaction.user.id);
-      return interaction.reply({ content: "✅ Participação confirmada!", ephemeral: true });
+  const sorteio = sorteios.get(interaction.message.id);
+  if (!sorteio) {
+    return interaction.editReply("⚠️ Esse sorteio não existe mais.");
+  }
+
+  // ---------- PARTICIPAR ----------
+  if (interaction.customId === "participar_sorteio") {
+    if (sorteio.participantes.includes(interaction.user.id)) {
+      return interaction.editReply("⚠️ Você já está participando!");
     }
 
-    if (interaction.customId === "sortear_sorteio" && sorteio) {
-      const vencedores = [];
-      const participantes = [...sorteio.participantes];
+    sorteio.participantes.push(interaction.user.id);
+    return interaction.editReply("✅ Participação confirmada! Boa sorte 🍀");
+  }
 
-      while (vencedores.length < sorteio.vencedores && participantes.length > 0) {
-        const index = Math.floor(Math.random() * participantes.length);
-        vencedores.push(participantes.splice(index, 1)[0]);
-      }
-
-      sorteios.delete(interaction.message.id);
-      await interaction.message.edit({ components: [] });
-
-      return interaction.reply({
-        content: `🎉 **VENCEDORES:**\n${vencedores.map(id => `<@${id}>`).join("\n")}`
-      });
+  // ---------- SORTEAR ----------
+  if (interaction.customId === "sortear_sorteio") {
+    if (sorteio.participantes.length === 0) {
+      return interaction.editReply("⚠️ Não há participantes.");
     }
+
+    const vencedores = [];
+    const participantes = [...sorteio.participantes];
+
+    while (vencedores.length < sorteio.vencedores && participantes.length > 0) {
+      const index = Math.floor(Math.random() * participantes.length);
+      vencedores.push(participantes.splice(index, 1)[0]);
+    }
+
+    sorteios.delete(interaction.message.id);
+    await interaction.message.edit({ components: [] });
+
+    return interaction.editReply(
+      `🎉 **VENCEDORES:**\n${vencedores.map(id => `<@${id}>`).join("\n")}`
+    );
   }
 });
 
