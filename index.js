@@ -9,7 +9,8 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  Events
+  Events,
+  InteractionType
 } = require("discord.js");
 
 const mercadopago = require("mercadopago");
@@ -41,10 +42,8 @@ app.get("/", (req, res) => {
 
 app.post("/webhook", async (req, res) => {
   try {
-    const data = req.body;
-
-    if (data.type === "payment") {
-      const payment = await mercadopago.payment.findById(data.data.id);
+    if (req.body.type === "payment") {
+      const payment = await mercadopago.payment.findById(req.body.data.id);
       const userId = payment.response.metadata?.discord_user_id;
 
       if (payment.response.status === "approved" && userId) {
@@ -57,7 +56,6 @@ app.post("/webhook", async (req, res) => {
         }
       }
     }
-
     res.sendStatus(200);
   } catch (err) {
     console.error("Erro no webhook:", err);
@@ -86,8 +84,12 @@ client.on("messageCreate", async message => {
   // ---------- +painel ----------
   if (message.content.toLowerCase() === "+painel") {
     panelData.set(message.author.id, {
-      embed: new EmbedBuilder().setTimestamp(),
-      fields: []
+      embed: new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setImage("https://i.imgur.com/XW5E8N4.png")
+        .setTimestamp(),
+      fields: [],
+      mencao: ""
     });
 
     const row1 = new ActionRowBuilder().addComponents(
@@ -130,6 +132,7 @@ client.on("messageCreate", async message => {
         `📌 **Condição:** ${condicao}`
       )
       .setColor(0x5865F2)
+      .setImage("https://i.imgur.com/XW5E8N4.png")
       .setTimestamp();
 
     const row = new ActionRowBuilder().addComponents(
@@ -150,48 +153,92 @@ client.on("messageCreate", async message => {
   }
 });
 
-// ===================== INTERAÇÕES (CORRIGIDO) =====================
+// ===================== INTERAÇÕES =====================
 client.on(Events.InteractionCreate, async interaction => {
-  if (!interaction.isButton()) return;
+  const data = panelData.get(interaction.user.id);
 
-  // evita "interação falhou"
-  await interaction.deferReply({ ephemeral: true });
+  // ---------- BOTÕES DO PAINEL ----------
+  if (interaction.isButton() && data) {
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferReply({ ephemeral: true }).catch(() => {});
+    }
 
-  const sorteio = sorteios.get(interaction.message.id);
-  if (!sorteio) {
-    return interaction.editReply("⚠️ Esse sorteio não existe mais.");
+    switch (interaction.customId) {
+      case "set_title": {
+        const modal = new ModalBuilder()
+          .setCustomId("modal_title")
+          .setTitle("Título & Descrição");
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("titulo")
+              .setLabel("Título")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("descricao")
+              .setLabel("Descrição")
+              .setStyle(TextInputStyle.Paragraph)
+              .setRequired(true)
+          )
+        );
+
+        return interaction.showModal(modal);
+      }
+
+      case "preview_send": {
+        return interaction.followUp({
+          content: data.mencao || "",
+          embeds: [data.embed]
+        });
+      }
+    }
   }
 
-  // ---------- PARTICIPAR ----------
-  if (interaction.customId === "participar_sorteio") {
-    if (sorteio.participantes.includes(interaction.user.id)) {
-      return interaction.editReply("⚠️ Você já está participando!");
+  // ---------- MODALS ----------
+  if (interaction.type === InteractionType.ModalSubmit && data) {
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferReply({ ephemeral: true }).catch(() => {});
     }
 
-    sorteio.participantes.push(interaction.user.id);
-    return interaction.editReply("✅ Participação confirmada! Boa sorte 🍀");
+    if (interaction.customId === "modal_title") {
+      data.embed
+        .setTitle(interaction.fields.getTextInputValue("titulo"))
+        .setDescription(interaction.fields.getTextInputValue("descricao"));
+
+      return interaction.followUp({ content: "✅ Atualizado!" });
+    }
   }
 
-  // ---------- SORTEAR ----------
-  if (interaction.customId === "sortear_sorteio") {
-    if (sorteio.participantes.length === 0) {
-      return interaction.editReply("⚠️ Não há participantes.");
+  // ---------- SORTEIO ----------
+  if (interaction.isButton()) {
+    const sorteio = sorteios.get(interaction.message.id);
+    if (!sorteio) return;
+
+    if (interaction.customId === "participar_sorteio") {
+      if (sorteio.participantes.includes(interaction.user.id)) {
+        return interaction.reply({ content: "⚠️ Você já participa!", ephemeral: true });
+      }
+
+      sorteio.participantes.push(interaction.user.id);
+      return interaction.reply({ content: "✅ Você entrou no sorteio!", ephemeral: true });
     }
 
-    const vencedores = [];
-    const participantes = [...sorteio.participantes];
+    if (interaction.customId === "sortear_sorteio") {
+      const vencedores = sorteio.participantes
+        .sort(() => 0.5 - Math.random())
+        .slice(0, sorteio.vencedores);
 
-    while (vencedores.length < sorteio.vencedores && participantes.length > 0) {
-      const index = Math.floor(Math.random() * participantes.length);
-      vencedores.push(participantes.splice(index, 1)[0]);
+      sorteios.delete(interaction.message.id);
+      await interaction.message.edit({ components: [] });
+
+      return interaction.reply({
+        content: `🎉 **VENCEDORES:**\n${vencedores.map(id => `<@${id}>`).join("\n")}`
+      });
     }
-
-    sorteios.delete(interaction.message.id);
-    await interaction.message.edit({ components: [] });
-
-    return interaction.editReply(
-      `🎉 **VENCEDORES:**\n${vencedores.map(id => `<@${id}>`).join("\n")}`
-    );
   }
 });
 
